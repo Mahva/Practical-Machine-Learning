@@ -1,0 +1,184 @@
+---
+title: "Practical Machine Learning - Exercise Prediction"
+author: "MahVal"
+date: "October 6, 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+
+## Overview
+
+People can track the quantity of thier activity usually quantify how much of a particular activity they do, but they rarely quantify how well they do it. The main goal of this project was to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 different participants, in order to predict the manner in which they did the exercise.The participants were asked to perform barbell lifts correctly and incorrectly in five different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+# Data Sources
+The training data were available at:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The testing data were available at:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The original source of the full data can be found at: http://groupware.les.inf.puc-rio.br/har. 
+
+# Step 1: Loading required packages
+
+```{r, results = "hide"}
+
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+install.packages("weatherData")
+
+#install required packages:
+install.packages("corrplot")
+install.packages('caret', dependencies = TRUE)
+install.packages("gbm")
+library(dplyr)
+library(gbm)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+library(knitr)
+library(corrplot)
+```
+
+# Step 2: Loading and reading dataset 
+
+```{r}
+# set the URL for the download
+UrlTrain <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+UrlTest  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# download the datasets
+TrainData <- read.csv(UrlTrain, header = T, na.strings = c("", "NA", "#DIV/0!"))
+TestData <- read.csv(UrlTest, header = T, na.strings = c("", "NA", "#DIV/0!"))
+
+dim(TrainData)
+dim(TestData)
+head(TrainData, n = 5)
+```
+
+# Step 3: Cleaning and preparation of dataset
+
+```{r}
+# Remove variables that are mostly NA
+TrainData <- Filter(function(x)!all(is.na(x)), TrainData)
+TestData <- Filter(function(x)!all(is.na(x)), TestData)
+
+# Remove all rows where new_window = Yes, since those are summary rows
+TrainData <- filter(TrainData, TrainData[, 6] == "no")
+TestData <- filter(TestData, TestData[, 6] == "no")
+
+# Remove variables with Nearly Zero Variance
+NearZero <- nearZeroVar(TrainData)
+TrainData <- TrainData[, -NearZero]
+NearZero <- nearZeroVar(TestData)
+TestData <- TestData[, -NearZero]
+
+# Remove identification only variables (columns 1 to 7)
+TrainData <- TrainData [, -(1:7)]
+TestData <- TestData [, -(1:7)]
+
+head(TrainData, n = 10)
+dim(TrainData)
+```
+
+
+# Correlation Analysis
+
+```{r}
+corr <- cor(TrainData [sapply(TrainData, is.numeric)], use = "complete.obs")
+corrplot(corr, order = "FPC", method = "color", type = "lower", 
+         tl.cex = 0.35, tl.col = rgb(0, 0, 0))
+```
+
+
+```{r}
+corcutoff <- findCorrelation(corr, cutoff = .90)
+TrainData <- TrainData[,-corcutoff]
+TestData <- TestData[,-corcutoff]
+```
+
+#Cross Validation
+```{r}
+# create a partition with the training dataset
+set.seed(11223) # For reproducibile purpose
+inTrain  <- createDataPartition(TrainData$classe, p=0.7, list=FALSE)
+TrainSet <- TrainData[inTrain, ]
+TestSet  <- TrainData[-inTrain, ]
+dim(TrainSet)
+```
+
+##Prediction Model Building
+
+# A: Decision Trees Method
+```{r}
+DecTree <- rpart(classe ~ ., data=TrainSet, method="class")
+fancyRpartPlot(DecTree)
+```
+```{r}
+# prediction on Test dataset
+predictDecTree <- predict(DecTree, newdata=TestSet, type="class")
+confMatDecTree <- confusionMatrix(predictDecTree, TestSet$classe)
+confMatDecTree
+```
+
+# B: Random Forests Method
+
+```{r, results = "hide"}
+controlRF <- trainControl(method="cv", number=5, verboseIter=FALSE)
+modFitRandForest <- train(classe ~ ., data=TrainSet, method="rf",
+                          trControl=controlRF)
+modFitRandForest$finalModel
+
+# prediction on Test dataset
+predictRandForest <- predict(modFitRandForest, newdata=TestSet)
+confMatRandForest <- confusionMatrix(predictRandForest, TestSet$classe)
+confMatRandForest
+```
+
+
+# C: Generalized Boosted Method
+
+```{r}
+controlgbm <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitgbm  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = controlgbm, verbose = FALSE)
+
+# prediction on Test dataset
+predictgbm <- predict(modFitgbm, newdata=TestSet)
+confMatgbm <- confusionMatrix(predictgbm, TestSet$classe)
+confMatgbm
+```
+
+```{r}
+AccuracyResults <- data.frame(
+  Model = c('CART', 'GBM', 'RF'),
+  Accuracy = rbind(confMatDecTree$overall[1], confMatgbm$overall[1], confMatRandForest$overall[1])
+)
+print(AccuracyResults)
+```
+Considering the accuracy of the three investigated methods, the Random Forest model was selected for validation process on the test data.
+
+# Applying the Selected Model to the Test Data
+```{r}
+TestPredict <- predict(modFitRandForest, newdata=TestData)
+TestPredictionResults <- data.frame(
+  problem_id=TestData$problem_id,
+  predicted=TestPredict
+)
+print(TestPredictionResults)
+```
+
+# Conclusion
+
+As seen, the Random Forest model resulted in a highly accurate prediction on the validation data set with accuracy of 0.993 leaving estimated out-of-sample error of 0.69%. 
+
